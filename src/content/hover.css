@@ -1,0 +1,21 @@
+.cm-card-link {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cm-hover-tooltip {
+  position: fixed;
+  z-index: 2147483647;
+  width: 244px;
+  height: auto;
+  pointer-events: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  border-radius: 4.75% / 3.5%;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.cm-hover-tooltip[hidden] { display: none; }

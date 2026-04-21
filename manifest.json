@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "CardMystic Hover",
+  "version": "0.1.0",
+  "description": "Turns Magic: The Gathering card names on supported pages into CardMystic links with a hover preview.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://api.scryfall.com/*"],
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://mtg.wiki/*",
+        "https://*.mtg.wiki/*",
+        "https://www.reddit.com/*",
+        "https://old.reddit.com/*",
+        "https://new.reddit.com/*",
+        "https://reddit.com/*",
+        "https://www.moxfield.com/decks/*",
+        "https://moxfield.com/decks/*",
+        "https://edhrec.com/articles/*",
+        "https://www.edhrec.com/articles/*"
+      ],
+      "js": [
+        "src/sites/mtgwiki.js",
+        "src/sites/reddit.js",
+        "src/sites/moxfield.js",
+        "src/sites/edhrec.js",
+        "src/sites/index.js",
+        "src/content/matcher.js",
+        "src/content/rewriter.js",
+        "src/content/hover.js",
+        "src/content/content.js"
+      ],
+      "css": ["src/content/hover.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "assets/icon-16.png",
+    "48": "assets/icon-48.png",
+    "128": "assets/icon-128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "cardmystic-hover@cardmystic.com",
+      "strict_min_version": "115.0"
+    }
+  }
+}
