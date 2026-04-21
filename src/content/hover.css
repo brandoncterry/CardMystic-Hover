@@ -19,3 +19,42 @@
 }
 
 .cm-hover-tooltip[hidden] { display: none; }
+
+/* "+" button that appends the card name to the clipboard. Rendered as a
+   plain text glyph rather than a boxed UI element so it blends into
+   whatever page design it lands in. The color is copied from the sibling
+   link at creation time (see plus.js) so it matches that page's link
+   palette. Bold so it stands out from surrounding prose. */
+.cm-card-plus {
+  all: unset;
+  display: inline-block;
+  font-weight: 700;
+  line-height: 1;
+  margin: 0 2px;
+  cursor: pointer;
+  user-select: none;
+  transform-origin: 50% 50%;
+  transition: color 150ms ease;
+}
+.cm-card-plus:hover { text-decoration: underline; }
+.cm-card-plus:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Persistent purple state: this card is on the clipboard. !important wins
+   over the inline `color` we copied from the sibling link. */
+.cm-card-plus--added { color: #7c3aed !important; }
+
+/* Brief red state on clipboard write failure (auto-cleared by plus.js). */
+.cm-card-plus--err   { color: #dc2626 !important; }
+
+/* Click feedback. 400 ms single rotation. */
+.cm-card-plus--spin {
+  animation: cm-card-plus-spin 400ms ease-in-out;
+}
+@keyframes cm-card-plus-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}

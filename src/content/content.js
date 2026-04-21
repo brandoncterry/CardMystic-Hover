@@ -80,8 +80,13 @@
         return;
       }
       trie = CM.matcher.makeTrie(resp.data);
+      // Expose a fast lookup Set for the "+" click handler. We use the same
+      // normalization as the trie so e.g. "Urza's Saga" (curly apostrophe
+      // on-page) matches the ASCII-apostrophe entry in the Scryfall catalog.
+      CM.cardNames = new Set(resp.data.map((n) => CM.matcher.normalize(n)));
       scan();
       CM.hover.install();
+      if (CM.plus && CM.plus.install) CM.plus.install();
       observe();
     });
   }

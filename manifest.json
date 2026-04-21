@@ -3,7 +3,7 @@
   "name": "CardMystic Hover",
   "version": "0.1.0",
   "description": "Turns Magic: The Gathering card names on supported pages into CardMystic links with a hover preview.",
-  "permissions": ["storage"],
+  "permissions": ["storage", "clipboardRead", "clipboardWrite"],
   "host_permissions": ["https://api.scryfall.com/*"],
   "background": {
     "service_worker": "src/background/service-worker.js",
@@ -30,6 +30,7 @@
         "src/sites/edhrec.js",
         "src/sites/index.js",
         "src/content/matcher.js",
+        "src/content/plus.js",
         "src/content/rewriter.js",
         "src/content/hover.js",
         "src/content/content.js"

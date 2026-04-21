@@ -170,6 +170,9 @@
       }
 
       registerPending(m.name, fresh);
+      // `fresh` is in the live DOM (stripListeners replaced the original
+      // anchor in-place), so .after() is safe here.
+      if (CM.plus && CM.plus.ensureFor) CM.plus.ensureFor(fresh, m.name);
     }
   }
 
@@ -204,6 +207,9 @@
         const a = makeAnchor(m.name);
         a.textContent = visible;
         frag.appendChild(a);
+        // Now that the anchor has a parent (the fragment), anchor.after()
+        // works. This inserts the "+" button as a sibling within the frag.
+        if (CM.plus && CM.plus.ensureFor) CM.plus.ensureFor(a, m.name);
         cursor = m.end;
       }
       if (cursor < text.length) {
@@ -213,11 +219,36 @@
     }
   }
 
+  // Safety pass: walk every tagged anchor under `root` and make sure each
+  // has its sibling "+" button. Covers cases where a host site mutated our
+  // DOM between passes, or where anchors predate the plus feature from a
+  // previous version of the extension.
+  function ensurePlusButtons(root) {
+    if (!CM.plus || !CM.plus.ensureFor) return;
+    const anchors = root.querySelectorAll("a." + LINK_CLASS);
+    for (const a of anchors) {
+      const name = a.dataset.cmCard;
+      if (!name) continue;
+      CM.plus.ensureFor(a, name);
+    }
+  }
+
+  // Subtrees we always skip, regardless of per-adapter configuration. These
+  // are elements the extension itself owns; scanning inside them would lead
+  // to infinite idempotency loops or turn our own UI into card links.
+  const BUILT_IN_SKIP = [
+    "a.cm-card-link",
+    "button.cm-card-plus",
+    ".cm-hover-tooltip",
+  ];
+
   function rewrite(root, trie, adapter) {
     if (!root || !trie || !adapter) return;
-    const skipSelectors = adapter.skipSelectors || [];
-    overrideAnchors(root, trie, adapter);
-    rewriteTextNodes(root, trie, skipSelectors);
+    const skips = BUILT_IN_SKIP.concat(adapter.skipSelectors || []);
+    const effectiveAdapter = Object.assign({}, adapter, { skipSelectors: skips });
+    overrideAnchors(root, trie, effectiveAdapter);
+    rewriteTextNodes(root, trie, skips);
+    ensurePlusButtons(root);
   }
 
   CM.rewriter = { rewrite, LINK_CLASS };

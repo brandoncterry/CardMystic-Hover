@@ -82,12 +82,30 @@
     currentTarget = null;
   }
 
+  // Two elements "belong to the same card" if both carry data-cm-card with
+  // the same value. Used so that hovering from an `a.cm-card-link` to its
+  // adjacent `.cm-card-plus` (both siblings, both tagged with the same card
+  // name) doesn't flicker the tooltip off and on.
+  function sameCard(a, b) {
+    if (!a || !b) return false;
+    const an = a.dataset && a.dataset.cmCard;
+    const bn = b.dataset && b.dataset.cmCard;
+    return !!an && an === bn;
+  }
+
   function onOver(e) {
     const target = e.target.closest && e.target.closest("[data-cm-card]");
     if (!target) return;
     lastX = e.clientX;
     lastY = e.clientY;
     clearTimeout(hideTimer);
+    // If we're moving between two elements of the same card (anchor ↔ "+"),
+    // just update currentTarget in place — no re-fetch, no re-flash.
+    if (currentTarget && sameCard(currentTarget, target) && tip && !tip.hidden) {
+      currentTarget = target;
+      positionAtCursor();
+      return;
+    }
     clearTimeout(showTimer);
     showTimer = setTimeout(() => show(target), SHOW_DELAY);
   }
@@ -97,7 +115,7 @@
     if (!target) return;
     lastX = e.clientX;
     lastY = e.clientY;
-    if (currentTarget === target && tip && !tip.hidden) {
+    if (currentTarget && sameCard(currentTarget, target) && tip && !tip.hidden) {
       positionAtCursor();
     }
   }
@@ -105,7 +123,16 @@
   function onOut(e) {
     const target = e.target.closest && e.target.closest("[data-cm-card]");
     if (!target) return;
+    // Cursor is moving inside the same element — ignore.
     if (e.relatedTarget && target.contains(e.relatedTarget)) return;
+    // Cursor is moving to a sibling that belongs to the same card (anchor
+    // ↔ "+" jump). Hold the tooltip open; the onOver handler on the new
+    // element will take over as currentTarget.
+    const nextCard =
+      e.relatedTarget && e.relatedTarget.closest
+        ? e.relatedTarget.closest("[data-cm-card]")
+        : null;
+    if (nextCard && sameCard(target, nextCard)) return;
     clearTimeout(showTimer);
     hideTimer = setTimeout(hide, HIDE_DELAY);
   }
