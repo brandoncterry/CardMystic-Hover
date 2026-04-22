@@ -3,14 +3,19 @@
 // Each tagged card link (`a.cm-card-link`) gets a sibling <button> that
 // appends the card name to the system clipboard on click.
 //
-//   - Format is one bare card name per line (matches what decklist importers
-//     expect for a plain list).
+//   - Append format matches the decklist format already on the clipboard:
+//     Arena/MTGA (`1 Sol Ring`), Moxfield (`1x Sol Ring`), or bare name.
+//     Detection is per-line via parseDeckLine — count prefixes, set codes
+//     (`(OTP) 123`, `[OTP]`), collector numbers, and MTGO markers
+//     (`*F*`, `*CMD*`) are all stripped so the extension recognizes
+//     `3 Gix, Yawgmoth Praetor (TDC) 181` as containing Gix. Any line
+//     that doesn't resolve to a known Scryfall card name (and isn't a
+//     comment or a section header like "Deck"/"Sideboard") makes the
+//     clipboard foreign and triggers an overwrite.
 //   - Duplicates on the clipboard are detected and not re-appended; the
 //     button does not animate in that case — a spin means "just wrote to
-//     the clipboard". No write ↔ no spin.
-//   - If the clipboard currently holds anything that isn't a pure card-name
-//     list (any non-empty line isn't a known Scryfall card name), the
-//     foreign contents are overwritten rather than appended to.
+//     the clipboard". No write ↔ no spin. Duplicate detection is
+//     format-agnostic: `3 Sol Ring` counts as Sol Ring being present.
 //   - Visual state: bold "+" in the link color when the card is NOT on the
 //     clipboard, purple when it IS. Colors are kept in sync with the real
 //     clipboard contents — external copies (Ctrl+C in another app, manual
@@ -124,49 +129,154 @@
   }
 
   // -----------------------------------------------------------------------
-  // Clipboard reconciliation — the single source of truth
+  // Decklist parser — recognizes Arena/MTGA, MTGO, Moxfield, Archidekt, and
+  // bare-name formats, with or without count prefixes, set codes, collector
+  // numbers, foil markers, and section headers.
   // -----------------------------------------------------------------------
 
-  function isKnownCardName(line) {
-    if (!CM.cardNames || !CM.matcher) return false;
-    return CM.cardNames.has(CM.matcher.normalize(line));
+  // Resolve any user-written card name (bare, split/DFC variant, one face
+  // only) to its canonical normalized Scryfall key, or null if unknown.
+  //
+  //   1. Direct hit in the catalog.
+  //   2. Slash normalization — Scryfall canonical uses " // " between faces;
+  //      users often write " / ", "//", or "/". Collapse any run of slashes
+  //      with optional surrounding whitespace to " // " and retry. Safe
+  //      because no real card name contains a bare "/".
+  //   3. Face-name fallback via CM.cardFaces (e.g. "Delver of Secrets" →
+  //      "Delver of Secrets // Insectile Aberration"). Built in content.js.
+  function resolveCardKey(name) {
+    if (!CM.cardNames || !CM.matcher) return null;
+    const key = CM.matcher.normalize(name);
+    if (CM.cardNames.has(key)) return key;
+
+    const slashed = key.replace(/\s*\/+\s*/g, " // ");
+    if (slashed !== key && CM.cardNames.has(slashed)) return slashed;
+
+    if (CM.cardFaces) {
+      const faceHit = CM.cardFaces.get(key);
+      if (faceHit) return faceHit;
+      if (slashed !== key) {
+        const faceSlashedHit = CM.cardFaces.get(slashed);
+        if (faceSlashedHit) return faceSlashedHit;
+      }
+    }
+
+    return null;
   }
 
-  // Returns true if every non-empty line is a known card name. An empty
-  // clipboard counts as a card list (trivially true — nothing violates).
-  function clipboardIsCardList(text) {
-    if (!text) return true;
-    const lines = text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-    if (!lines.length) return true;
-    for (const line of lines) {
-      if (!isKnownCardName(line)) return false;
-    }
-    return true;
+  function lookupCard(name) {
+    return resolveCardKey(name);
   }
 
-  function parseCardKeys(text) {
-    const keys = new Set();
-    if (!text) return keys;
-    const lines = text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-    for (const line of lines) {
-      const k = keyOf(line);
-      if (CM.cardNames && CM.cardNames.has(k)) keys.add(k);
-    }
-    return keys;
+  // Headers we accept so their presence doesn't disqualify the decklist.
+  const SECTION_WORDS = /^(deck|sideboard|maybeboard|commander|companion|tokens)\s*:?\s*$/i;
+
+  // Strip trailing Arena `(SET) 123`, Moxfield `[SET]`, and MTGO `*F*`/`*CMD*`
+  // markers iteratively so a line carrying several of them reduces to the
+  // bare card name. Run until no suffix matches.
+  function stripRightDecorations(s) {
+    const patterns = [
+      /\s*\([A-Za-z0-9]+\)(\s+\d+)?\s*$/,  // (SET) or (SET) 123
+      /\s*\[[A-Za-z0-9]+\]\s*$/,           // [SET]
+      /\s*\*[A-Za-z]+\*\s*$/,              // *F* / *CMD* / *Foil*
+    ];
+    let prev;
+    do {
+      prev = s;
+      for (const re of patterns) s = s.replace(re, "");
+    } while (s !== prev);
+    return s.trim();
   }
+
+  // Parse one line into { kind, ... }. See plan for kind schema.
+  function parseDeckLine(raw) {
+    if (raw == null) return { kind: "empty" };
+    const trimmed = String(raw).trim();
+    if (!trimmed) return { kind: "empty" };
+
+    // Try stripping a left-side decorator stack: optional `SB:`, optional
+    // count-with-optional-x.
+    let rest = trimmed;
+    let prefix = "";       // what we'd re-emit when appending in this style
+    let sideboard = false; // just for header disambiguation of bare "SB:"
+
+    const sbMatch = rest.match(/^SB:\s*/i);
+    if (sbMatch) {
+      sideboard = true;
+      rest = rest.slice(sbMatch[0].length);
+    }
+
+    const countMatch = rest.match(/^(\d+)(x)?\s+/i);
+    if (countMatch) {
+      prefix = countMatch[2] ? "1x " : "1 ";
+      rest = rest.slice(countMatch[0].length);
+    }
+
+    // Right-side: strip set codes, collector numbers, foil markers.
+    const stripped = stripRightDecorations(rest);
+
+    // Try the stripped form first, then the un-stripped remainder (handles
+    // names that legitimately contain parens/brackets, e.g. tokens).
+    let key = lookupCard(stripped);
+    let cardName = stripped;
+    if (!key) {
+      key = lookupCard(rest);
+      cardName = rest;
+    }
+    if (key) {
+      return { kind: "card", cardKey: key, cardName, prefix };
+    }
+
+    // Not a card. Check if it's a recognized header or comment.
+    if (/^(\/\/|#)/.test(trimmed)) return { kind: "header", raw: trimmed };
+    if (SECTION_WORDS.test(trimmed)) return { kind: "header", raw: trimmed };
+    if (sideboard && !rest) return { kind: "header", raw: trimmed };
+
+    return { kind: "unknown", raw: trimmed };
+  }
+
+  // Classify the full clipboard. Any `unknown` line disqualifies.
+  function parseDeckList(text) {
+    const out = {
+      isDeckList: true,
+      cardKeys: new Set(),
+      format: { countStyle: "" },
+    };
+    if (!text) return out;
+    const lines = text.split(/\r?\n/);
+    let firstCardPrefix = null;
+    for (const raw of lines) {
+      const parsed = parseDeckLine(raw);
+      if (parsed.kind === "unknown") {
+        out.isDeckList = false;
+        out.cardKeys.clear();
+        out.format.countStyle = "";
+        return out;
+      }
+      if (parsed.kind === "card") {
+        out.cardKeys.add(parsed.cardKey);
+        if (firstCardPrefix == null) firstCardPrefix = parsed.prefix;
+      }
+    }
+    if (firstCardPrefix != null) out.format.countStyle = firstCardPrefix;
+    return out;
+  }
+
+  // -----------------------------------------------------------------------
+  // Clipboard reconciliation — the single source of truth
+  // -----------------------------------------------------------------------
 
   // Drive `addedNames` and every button's `--added` class from the current
   // clipboard text. This is the ONLY place addedNames and the purple class
   // are written — all other paths go through here.
   function reconcileClipboard(text) {
+    const parse = parseDeckList(text || "");
     // Foreign contents → clipboard holds nothing we recognize as added.
-    const nextKeys = clipboardIsCardList(text) ? parseCardKeys(text) : new Set();
+    const nextKeys = parse.isDeckList ? parse.cardKeys : new Set();
 
-    // Replace addedNames atomically.
     addedNames.clear();
     for (const k of nextKeys) addedNames.add(k);
 
-    // Sweep every existing "+" button once.
     const buttons = document.querySelectorAll("." + BTN_CLASS);
     for (const el of buttons) {
       const k = keyOf(el.dataset.cmCard || "");
@@ -202,9 +312,13 @@
       existing = "";
     }
 
+    // Single parse reused for decide-what-to-do + UI reconcile. Parsing
+    // handles Arena (`1 Card (SET) 123`), Moxfield (`1x Card`), MTGO
+    // (`1 Card *F*`), bare names, and section headers.
+    const parse = parseDeckList(existing);
+
     // Bring UI state in line with what the clipboard ACTUALLY holds before
-    // we decide what to do. This also covers external copies made between
-    // the last focus/copy event and this click.
+    // we decide what to do. Covers external copies since the last event.
     reconcileClipboard(existing);
 
     const writeText = async (text) => {
@@ -218,25 +332,26 @@
     };
 
     // Foreign clipboard contents — overwrite entirely with just this name.
-    if (!clipboardIsCardList(existing)) {
+    if (!parse.isDeckList) {
       const ok = await writeText(name);
       if (!ok) { markError(btn); return; }
-      // Re-derive state from the NEW clipboard (just this name).
       reconcileClipboard(name);
       spin(btn);
       showToast();
       return;
     }
 
-    // Already on the clipboard — reconcile already flipped the button
-    // purple; no write, no spin.
-    if (addedNames.has(keyOf(name))) {
+    // Already on the clipboard under some recognized format — reconcile
+    // already flipped the button purple; no write, no spin, no toast.
+    if (parse.cardKeys.has(keyOf(name))) {
       return;
     }
 
-    // Fresh append.
+    // Fresh append, matching the detected format so we don't mix styles
+    // within one decklist.
     const base = (existing || "").trimEnd();
-    const next = base ? `${base}\n${name}` : name;
+    const joiner = base ? "\n" : "";
+    const next = `${base}${joiner}${parse.format.countStyle}${name}`;
     const ok = await writeText(next);
     if (!ok) { markError(btn); return; }
     reconcileClipboard(next);

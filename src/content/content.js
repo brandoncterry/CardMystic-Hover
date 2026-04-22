@@ -84,6 +84,29 @@
       // normalization as the trie so e.g. "Urza's Saga" (curly apostrophe
       // on-page) matches the ASCII-apostrophe entry in the Scryfall catalog.
       CM.cardNames = new Set(resp.data.map((n) => CM.matcher.normalize(n)));
+
+      // Face-name index for double-faced / split / adventure / MDFC cards.
+      // Scryfall's catalog stores these as "Front // Back"; decklists in the
+      // wild frequently reference only one face ("Delver of Secrets" from
+      // Arena exports, "Fire" for a split card, etc.). Build a map from each
+      // face's normalized name to its canonical full name so the "+" click
+      // handler can resolve either half back to the full card.
+      //
+      // Only register a face if it isn't already a standalone card name —
+      // real standalones always win. On collision between two multi-face
+      // cards sharing a face-name substring, keep the first registration.
+      CM.cardFaces = new Map();
+      for (const original of resp.data) {
+        if (typeof original !== "string" || original.indexOf(" // ") < 0) continue;
+        const canonical = CM.matcher.normalize(original);
+        for (const part of canonical.split(" // ")) {
+          const face = part.trim();
+          if (!face || face === canonical) continue;
+          if (CM.cardNames.has(face)) continue;    // don't shadow a real card
+          if (CM.cardFaces.has(face)) continue;    // first registration wins
+          CM.cardFaces.set(face, canonical);
+        }
+      }
       scan();
       CM.hover.install();
       if (CM.plus && CM.plus.install) CM.plus.install();
