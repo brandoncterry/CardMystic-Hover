@@ -58,3 +58,40 @@
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
+
+/* Hotkey reminder toast. Fades in at the bottom-right every time a card
+   is actually added to the clipboard; auto-dismisses after ~2.8 s. */
+.cm-clip-toast {
+  position: fixed;
+  left: 20px;
+  bottom: 20px;
+  z-index: 2147483647;
+  max-width: 280px;
+  padding: 10px 14px;
+  background: rgba(15, 15, 17, 0.94);
+  color: #f4f4f5;
+  font: 500 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+.cm-clip-toast--visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.cm-clip-toast kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  margin: 0 2px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  font: 12px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #f4f4f5;
+}
+.cm-clip-toast__text {
+  margin-left: 4px;
+}

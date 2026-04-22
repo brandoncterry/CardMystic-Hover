@@ -86,6 +86,44 @@
   }
 
   // -----------------------------------------------------------------------
+  // "Ctrl+Shift+Space for Clipped Cards" toast
+  // -----------------------------------------------------------------------
+  //
+  // Shown in the bottom-left corner after any successful write to the
+  // clipboard — i.e. exactly when the user adds a new card. Duplicate
+  // clicks don't re-trigger (nothing was written), write failures don't
+  // trigger, and the toast auto-dismisses after a short delay. Repeated
+  // additions within the window reset the dismiss timer so a streak of
+  // clicks keeps the hint visible without restacking animations.
+
+  const TOAST_MS = 2800;
+  let toastEl = null;
+  let toastDismissTimer = null;
+
+  function ensureToast() {
+    if (toastEl && toastEl.isConnected) return toastEl;
+    toastEl = document.createElement("div");
+    toastEl.className = "cm-clip-toast";
+    toastEl.setAttribute("role", "status");
+    toastEl.setAttribute("aria-live", "polite");
+    // Trusted static markup — no interpolation.
+    toastEl.innerHTML =
+      '<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd>' +
+      '<span class="cm-clip-toast__text"> for Clipped Cards</span>';
+    document.body.appendChild(toastEl);
+    return toastEl;
+  }
+
+  function showToast() {
+    const el = ensureToast();
+    el.classList.add("cm-clip-toast--visible");
+    clearTimeout(toastDismissTimer);
+    toastDismissTimer = setTimeout(() => {
+      el.classList.remove("cm-clip-toast--visible");
+    }, TOAST_MS);
+  }
+
+  // -----------------------------------------------------------------------
   // Clipboard reconciliation — the single source of truth
   // -----------------------------------------------------------------------
 
@@ -186,6 +224,7 @@
       // Re-derive state from the NEW clipboard (just this name).
       reconcileClipboard(name);
       spin(btn);
+      showToast();
       return;
     }
 
@@ -202,6 +241,7 @@
     if (!ok) { markError(btn); return; }
     reconcileClipboard(next);
     spin(btn);
+    showToast();
   }
 
   // -----------------------------------------------------------------------

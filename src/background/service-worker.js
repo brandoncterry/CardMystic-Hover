@@ -26,3 +26,41 @@ async function handle(msg) {
       throw new Error(`unknown type: ${msg.type}`);
   }
 }
+
+// -----------------------------------------------------------------------
+// Hotkey: Alt+Shift+Z opens (or focuses + refreshes) the clipboard viewer.
+// Registered under the "open-clipboard-viewer" command name in manifest.json.
+// -----------------------------------------------------------------------
+
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command !== "open-clipboard-viewer") return;
+  try {
+    await openOrFocusViewer();
+  } catch (err) {
+    console.warn("[CardMystic] viewer open failed", err);
+  }
+});
+
+async function openOrFocusViewer() {
+  const viewerUrl = chrome.runtime.getURL("src/viewer/viewer.html");
+
+  // Look for an existing viewer tab. If more than one exists (shouldn't,
+  // but a user could have manually duplicated), use the first.
+  const existing = await chrome.tabs.query({ url: viewerUrl });
+  if (existing && existing.length) {
+    const tab = existing[0];
+    await chrome.tabs.update(tab.id, { active: true });
+    if (typeof tab.windowId === "number") {
+      try {
+        await chrome.windows.update(tab.windowId, { focused: true });
+      } catch (_) {
+        // Firefox may throw if the window can't be focused; the tab switch
+        // above is enough for the visibilitychange listener in viewer.js
+        // to re-read the clipboard.
+      }
+    }
+    return tab;
+  }
+
+  return await chrome.tabs.create({ url: viewerUrl });
+}

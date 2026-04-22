@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>CardMystic Clipboard</title>
+    <link rel="stylesheet" href="viewer.css">
+  </head>
+  <body>
+    <header>
+      <h1>Clipboard</h1>
+      <div id="meta" aria-live="polite"></div>
+    </header>
+    <main>
+      <pre id="out" aria-live="polite"></pre>
+      <p id="empty" class="hint" hidden>Clipboard is empty.</p>
+      <p id="error" class="hint" hidden>
+        Couldn't read the clipboard. Click anywhere in this tab and press
+        <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd> again.
+      </p>
+    </main>
+    <script src="viewer.js"></script>
+  </body>
+</html>

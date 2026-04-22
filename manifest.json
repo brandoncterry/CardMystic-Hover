@@ -3,7 +3,7 @@
   "name": "CardMystic Hover",
   "version": "0.1.0",
   "description": "Turns Magic: The Gathering card names on supported pages into CardMystic links with a hover preview.",
-  "permissions": ["storage", "clipboardRead", "clipboardWrite"],
+  "permissions": ["storage", "clipboardRead", "clipboardWrite", "tabs"],
   "host_permissions": ["https://api.scryfall.com/*"],
   "background": {
     "service_worker": "src/background/service-worker.js",
@@ -43,6 +43,15 @@
     "16": "assets/icon-16.png",
     "48": "assets/icon-48.png",
     "128": "assets/icon-128.png"
+  },
+  "commands": {
+    "open-clipboard-viewer": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Space",
+        "mac": "MacCtrl+Shift+Space"
+      },
+      "description": "Open the CardMystic clipboard viewer"
+    }
   },
   "browser_specific_settings": {
     "gecko": {
