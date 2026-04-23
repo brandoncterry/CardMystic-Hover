@@ -22,6 +22,11 @@ async function handle(msg) {
     case "getCard":
       if (!msg.name) throw new Error("missing name");
       return await getCardByName(msg.name);
+    case "openViewer":
+      // Same flow as the Ctrl+Shift+Space hotkey — find-or-create a viewer
+      // tab. Used by the FAB panel's "Open full viewer" footer button.
+      await openOrFocusViewer();
+      return true;
     default:
       throw new Error(`unknown type: ${msg.type}`);
   }

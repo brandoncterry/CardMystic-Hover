@@ -4,6 +4,17 @@
   cursor: pointer;
 }
 
+/* Briefly applied by fab.js when the user clicks "scroll to next
+   occurrence" in the Cards on Page tab, so the just-scrolled-to anchor
+   flashes visibly. Auto-cleared after ~900 ms. */
+.cm-card-link--flash {
+  outline: 2px solid #c084fc;
+  outline-offset: 2px;
+  background: rgba(192, 132, 252, 0.15);
+  transition: outline 500ms ease, background 500ms ease;
+  border-radius: 2px;
+}
+
 .cm-hover-tooltip {
   position: fixed;
   z-index: 2147483647;

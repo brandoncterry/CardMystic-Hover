@@ -31,12 +31,35 @@
         "src/sites/index.js",
         "src/content/matcher.js",
         "src/content/plus.js",
+        "src/content/history.js",
         "src/content/rewriter.js",
         "src/content/hover.js",
+        "src/content/fab.js",
         "src/content/content.js"
       ],
       "css": ["src/content/hover.css"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "assets/icon-128.png",
+        "assets/icon-48.png",
+        "assets/icon-16.png"
+      ],
+      "matches": [
+        "https://mtg.wiki/*",
+        "https://*.mtg.wiki/*",
+        "https://www.reddit.com/*",
+        "https://old.reddit.com/*",
+        "https://new.reddit.com/*",
+        "https://reddit.com/*",
+        "https://www.moxfield.com/*",
+        "https://moxfield.com/*",
+        "https://edhrec.com/*",
+        "https://www.edhrec.com/*"
+      ]
     }
   ],
   "icons": {

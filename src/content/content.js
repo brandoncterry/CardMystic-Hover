@@ -110,6 +110,10 @@
       scan();
       CM.hover.install();
       if (CM.plus && CM.plus.install) CM.plus.install();
+      // Load history state before plus.js's first reconcile fires so
+      // history.process catches the boot-time clipboard read.
+      if (CM.history && CM.history.init) CM.history.init();
+      if (CM.fab && CM.fab.install) CM.fab.install();
       observe();
     });
   }

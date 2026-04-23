@@ -137,10 +137,16 @@
     hideTimer = setTimeout(hide, HIDE_DELAY);
   }
 
-  function install() {
-    document.addEventListener("mouseover", onOver, true);
-    document.addEventListener("mousemove", onMove, true);
-    document.addEventListener("mouseout", onOut, true);
+  // install(root) — attach the hover delegation to any EventTarget. Default
+  // is `document` for the normal content-script path. The FAB panel passes
+  // its ShadowRoot so in-shadow card links (e.g. the Cards on Page tab's
+  // rows) trigger the same tooltip. Safe to call multiple times with
+  // different roots because each listener only acts via `e.target.closest`.
+  function install(root) {
+    const target = root || document;
+    target.addEventListener("mouseover", onOver, true);
+    target.addEventListener("mousemove", onMove, true);
+    target.addEventListener("mouseout", onOut, true);
   }
 
   CM.hover = { install };

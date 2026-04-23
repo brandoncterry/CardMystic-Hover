@@ -268,7 +268,8 @@
 
   // Drive `addedNames` and every button's `--added` class from the current
   // clipboard text. This is the ONLY place addedNames and the purple class
-  // are written — all other paths go through here.
+  // are written — all other paths go through here. Also the canonical
+  // entry point for the history state machine; see CM.history.process.
   function reconcileClipboard(text) {
     const parse = parseDeckList(text || "");
     // Foreign contents → clipboard holds nothing we recognize as added.
@@ -283,6 +284,12 @@
       if (nextKeys.has(k)) el.classList.add("cm-card-plus--added");
       else el.classList.remove("cm-card-plus--added");
     }
+
+    // Session + history bookkeeping. history.process is a no-op before
+    // CM.history.init() resolves, so the ordering during boot is safe.
+    if (CM.history && CM.history.process) {
+      CM.history.process(text || "");
+    }
   }
 
   // Read the clipboard and reconcile. Swallows read errors (permission /
@@ -292,9 +299,69 @@
     try {
       const text = await navigator.clipboard.readText();
       reconcileClipboard(text || "");
+      dispatchClipChange();
     } catch (_) {
       // No-op: can't read right now (no focus, denied permission, etc.)
     }
+  }
+
+  // Notify other modules in the same content-script world (e.g. the FAB
+  // panel) that the clipboard has changed and any cached view of it should
+  // be re-rendered. Cheap CustomEvent on document — listeners filter by
+  // panelOpen / visibility themselves.
+  function dispatchClipChange() {
+    try {
+      document.dispatchEvent(new CustomEvent("cm:clipboardchanged"));
+    } catch (_) { /* noop */ }
+  }
+
+  // Exposed helper used by the FAB panel's per-line remove button. Writes
+  // the given text to the clipboard, reconciles the button states, and
+  // fires the change event so any open panel re-renders. Centralizes the
+  // write path so all mutations flow through the same bookkeeping.
+  async function writeClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      reconcileClipboard(text);
+      dispatchClipChange();
+      return true;
+    } catch (err) {
+      console.warn("[CardMystic] clipboard write failed", err);
+      return false;
+    }
+  }
+
+  // Exposed helper for the FAB panel's "Cards on Page" tab. Finds the first
+  // matching in-page "+" button for the given card name and clicks it
+  // programmatically — which reuses the full existing click flow (spin,
+  // toast, format-aware append, reconcile, history). If no in-page button
+  // exists yet (e.g. the anchor was removed by a site SPA), we fall back
+  // to a direct append via writeClipboard.
+  async function clipCard(name) {
+    if (!name) return false;
+    try {
+      const selector = `a.${LINK_CLASS}[data-cm-card="${CSS.escape(name)}"]`;
+      const anchor = document.querySelector(selector);
+      if (anchor) {
+        const sib = anchor.nextElementSibling;
+        if (sib && sib.classList && sib.classList.contains(BTN_CLASS)) {
+          sib.click();
+          return true;
+        }
+      }
+    } catch (err) {
+      console.warn("[CardMystic] clipCard anchor lookup failed", err);
+    }
+    // Fallback: do the append ourselves.
+    let existing = "";
+    try { existing = await navigator.clipboard.readText(); } catch (_) {}
+    const parse = parseDeckList(existing);
+    if (!parse.isDeckList) return await writeClipboard(name);
+    if (parse.cardKeys.has(keyOf(name))) return true; // already present
+    const base = (existing || "").trimEnd();
+    const joiner = base ? "\n" : "";
+    const next = `${base}${joiner}${parse.format.countStyle}${name}`;
+    return await writeClipboard(next);
   }
 
   // -----------------------------------------------------------------------
@@ -336,6 +403,7 @@
       const ok = await writeText(name);
       if (!ok) { markError(btn); return; }
       reconcileClipboard(name);
+      dispatchClipChange();
       spin(btn);
       showToast();
       return;
@@ -355,6 +423,7 @@
     const ok = await writeText(next);
     if (!ok) { markError(btn); return; }
     reconcileClipboard(next);
+    dispatchClipChange();
     spin(btn);
     showToast();
   }
@@ -417,5 +486,13 @@
     refreshFromClipboard();
   }
 
-  CM.plus = { ensureFor, install, BTN_CLASS };
+  CM.plus = {
+    ensureFor,
+    install,
+    BTN_CLASS,
+    parseDeckList,
+    keyOf,
+    writeClipboard,
+    clipCard,
+  };
 })();
