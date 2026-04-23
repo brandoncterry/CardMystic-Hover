@@ -3,7 +3,15 @@
   "name": "CardMystic Hover",
   "version": "0.1.0",
   "description": "Turns Magic: The Gathering card names on supported pages into CardMystic links with a hover preview.",
-  "permissions": ["storage", "clipboardRead", "clipboardWrite", "tabs"],
+  "permissions": [
+    "storage",
+    "clipboardRead",
+    "clipboardWrite",
+    "tabs",
+    "contextMenus",
+    "scripting",
+    "activeTab"
+  ],
   "host_permissions": ["https://api.scryfall.com/*"],
   "background": {
     "service_worker": "src/background/service-worker.js",
@@ -11,18 +19,7 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://mtg.wiki/*",
-        "https://*.mtg.wiki/*",
-        "https://www.reddit.com/*",
-        "https://old.reddit.com/*",
-        "https://new.reddit.com/*",
-        "https://reddit.com/*",
-        "https://www.moxfield.com/decks/*",
-        "https://moxfield.com/decks/*",
-        "https://edhrec.com/articles/*",
-        "https://www.edhrec.com/articles/*"
-      ],
+      "matches": ["<all_urls>"],
       "js": [
         "src/sites/mtgwiki.js",
         "src/sites/reddit.js",
@@ -34,6 +31,7 @@
         "src/content/history.js",
         "src/content/rewriter.js",
         "src/content/hover.js",
+        "src/content/sitesettings.js",
         "src/content/fab.js",
         "src/content/content.js"
       ],
@@ -48,18 +46,7 @@
         "assets/icon-48.png",
         "assets/icon-16.png"
       ],
-      "matches": [
-        "https://mtg.wiki/*",
-        "https://*.mtg.wiki/*",
-        "https://www.reddit.com/*",
-        "https://old.reddit.com/*",
-        "https://new.reddit.com/*",
-        "https://reddit.com/*",
-        "https://www.moxfield.com/*",
-        "https://moxfield.com/*",
-        "https://edhrec.com/*",
-        "https://www.edhrec.com/*"
-      ]
+      "matches": ["<all_urls>"]
     }
   ],
   "icons": {

@@ -2,14 +2,12 @@
 //
 // Injected on every supported site. Everything user-visible lives inside a
 // Shadow DOM attached to a single host <div>, so host-page CSS can never
-// reach the FAB, panel, or sliver.
+// reach the FAB or panel.
 //
 // State (persisted in chrome.storage.local):
 //   "fab:y"            number | null   — global vertical offset in pixels.
 //                                        null = center (default).
-//   "fab:hiddenHosts"  string[]        — hostnames where the user chose to
-//                                        hide the FAB. Rendered as a slim
-//                                        right-edge sliver instead.
+//   "fab:panelY"       number | null   — dragged drawer Y; null = computed.
 //
 // Public API (on window.CM.fab):
 //   install()          — build the UI, load state, wire listeners.
@@ -22,7 +20,6 @@
   const HOST_ID = "cardmystic-fab-host";
   const KEY_POS_Y = "fab:y";
   const KEY_PANEL_Y = "fab:panelY";
-  const KEY_HIDDEN = "fab:hiddenHosts";
   const RIGHT_MARGIN = 12;     // gap from viewport right edge
   const FAB_SIZE = 52;
   const PANEL_W = 320;
@@ -49,7 +46,7 @@
     *, *::before, *::after { box-sizing: border-box; }
     button { all: unset; cursor: pointer; font: inherit; }
 
-    .fab, .panel, .sliver {
+    .fab, .panel {
       position: fixed;
       z-index: 2147483647;
       font: 500 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -126,51 +123,6 @@
     @keyframes cm-fab-pulse {
       0%, 100% { transform: scale(1);   opacity: 1;   }
       50%      { transform: scale(1.35); opacity: 0.55; }
-    }
-
-    /* Hover-only × for "hide on this site". */
-    .fab__close {
-      position: absolute;
-      top: -6px;
-      left: -6px;
-      width: 18px;
-      height: 18px;
-      display: grid;
-      place-items: center;
-      border-radius: 50%;
-      background: var(--w-15);
-      color: var(--w-75);
-      font-size: 13px;
-      line-height: 1;
-      opacity: 0;
-      transform: scale(0.85);
-      transition: opacity 140ms ease, transform 140ms ease, background 140ms ease;
-      border: 1px solid var(--border-1);
-    }
-    .fab:hover .fab__close {
-      opacity: 1;
-      transform: scale(1);
-    }
-    .fab__close:hover {
-      background: var(--w-30);
-      color: var(--w-100);
-    }
-
-    /* ---------- Sliver (shown when FAB is hidden on this host) ---------- */
-    .sliver {
-      width: 6px;
-      height: 64px;
-      right: 0;
-      background: var(--w-15);
-      border: 1px solid var(--border-1);
-      border-right: 0;
-      border-radius: 4px 0 0 4px;
-      transition: background 160ms ease, transform 160ms ease, width 160ms ease;
-    }
-    .sliver:hover {
-      background: var(--w-30);
-      transform: translateX(-2px);
-      width: 8px;
     }
 
     /* ---------- Panel (slide-in drawer from the right) ---------- */
@@ -412,6 +364,75 @@
       flex-shrink: 0;
     }
 
+    /* ---------- Toggle switches (Cards on Page header) ---------- */
+    .tab-body__toggles {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 10px 14px 4px;
+      border-bottom: 1px solid var(--border-2);
+    }
+    .switch-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 0;
+    }
+    .switch-row[hidden] { display: none; }
+    .switch-row__label {
+      flex: 1;
+      color: var(--w-75);
+      font-size: 12.5px;
+      user-select: none;
+    }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 32px;
+      height: 18px;
+      flex-shrink: 0;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+      margin: 0;
+      position: absolute;
+    }
+    .switch__slider {
+      position: absolute;
+      inset: 0;
+      background: var(--w-15);
+      border: 1px solid var(--border-1);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 160ms ease, border-color 160ms ease;
+    }
+    .switch__slider::before {
+      content: "";
+      position: absolute;
+      height: 12px;
+      width: 12px;
+      left: 2px;
+      top: 2px;
+      background: var(--w-75);
+      border-radius: 50%;
+      transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+                  background 160ms ease;
+    }
+    .switch input:checked + .switch__slider {
+      background: #c084fc;
+      border-color: #c084fc;
+    }
+    .switch input:checked + .switch__slider::before {
+      transform: translateX(14px);
+      background: var(--w-100);
+    }
+    .switch input:focus-visible + .switch__slider {
+      outline: 2px solid var(--w-40);
+      outline-offset: 2px;
+    }
+
     /* ---------- Cards on Page ---------- */
     .panel__cardlink {
       flex: 1;
@@ -451,6 +472,15 @@
     .panel__addToClip:focus-visible {
       outline: 2px solid var(--w-40);
       outline-offset: 1px;
+    }
+    /* Row's card is on the clipboard — button is a remove toggle. */
+    .panel__addToClip--added {
+      color: #c084fc;
+    }
+    .panel__list li:hover .panel__addToClip--added,
+    .panel__addToClip--added:hover {
+      color: #d8b4fe;
+      background: var(--w-10);
     }
 
     /* ---------- Clip History ---------- */
@@ -516,11 +546,9 @@
   let host = null;
   let root = null;
   let fab = null;
-  let fabCloseBtn = null;
   let panel = null;
   let panelHeader = null;
   let panelCloseBtn = null;
-  let sliver = null;
 
   // Tab DOM (per-tab body sections + shared footer slot)
   let tabsNav = null;
@@ -539,6 +567,10 @@
   let pageCount = null;
   let pageObserver = null;
   let pageRenderTimer = 0;
+  // Cards on Page toggle-row DOM refs
+  let pageToggleDiscover = null;
+  let pageToggleHyperlinks = null;
+  let pageToggleHyperlinksRow = null;
   // Per-card cursor for the "scroll to next occurrence" button, keyed by
   // normalized card name. Rotates through the in-page anchors for that card.
   const pageCycleIndex = new Map();
@@ -553,9 +585,7 @@
 
   let posY = null;             // pixels from top for the FAB, null = centered
   let panelY = null;           // user-dragged top for the drawer, null = computed from FAB Y
-  const hiddenHosts = new Set();
   let panelOpen = false;
-  let isHiddenHere = false;
 
   // FAB drag state
   let dragArmed = false;
@@ -574,11 +604,9 @@
 
   async function loadState() {
     try {
-      const out = await chrome.storage.local.get([KEY_POS_Y, KEY_PANEL_Y, KEY_HIDDEN]);
+      const out = await chrome.storage.local.get([KEY_POS_Y, KEY_PANEL_Y]);
       if (typeof out[KEY_POS_Y] === "number") posY = out[KEY_POS_Y];
       if (typeof out[KEY_PANEL_Y] === "number") panelY = out[KEY_PANEL_Y];
-      const arr = out[KEY_HIDDEN];
-      if (Array.isArray(arr)) for (const h of arr) hiddenHosts.add(h);
     } catch (err) {
       console.warn("[CardMystic] fab loadState failed", err);
     }
@@ -594,13 +622,7 @@
     catch (err) { console.warn("[CardMystic] fab savePanelY failed", err); }
   }
 
-  function saveHidden() {
-    try {
-      chrome.storage.local.set({ [KEY_HIDDEN]: Array.from(hiddenHosts) });
-    } catch (err) { console.warn("[CardMystic] fab saveHidden failed", err); }
-  }
-
-  // Cross-tab sync — if the user hides / drags the FAB or the drawer in
+  // Cross-tab sync — if the user drags the FAB or the drawer in
   // another tab, pick up the change without needing a reload.
   function watchStorage() {
     chrome.storage.onChanged.addListener((changes, area) => {
@@ -614,12 +636,6 @@
         panelY = typeof changes[KEY_PANEL_Y].newValue === "number"
           ? changes[KEY_PANEL_Y].newValue : null;
         if (panelOpen) positionPanel();
-      }
-      if (changes[KEY_HIDDEN]) {
-        hiddenHosts.clear();
-        const arr = changes[KEY_HIDDEN].newValue;
-        if (Array.isArray(arr)) for (const h of arr) hiddenHosts.add(h);
-        applyHidden();
       }
     });
   }
@@ -679,10 +695,6 @@
     // out via the .fab--hidden class while the panel is open.
     fab.style.top = `${closedFabTop()}px`;
     fab.style.right = `${RIGHT_MARGIN}px`;
-    if (sliver) {
-      sliver.style.top = `${closedFabTop()}px`;
-      sliver.style.right = "0px";
-    }
   }
 
   function positionPanel() {
@@ -690,32 +702,6 @@
     const layout = computePanelLayout();
     panel.style.top = `${layout.panelTop}px`;
     panel.style.height = `${layout.panelHeight}px`;
-  }
-
-  // ----- visibility / hide-per-site -----
-
-  function applyHidden() {
-    isHiddenHere = hiddenHosts.has(location.hostname);
-    if (isHiddenHere) {
-      if (panelOpen) closePanel();
-      fab.hidden = true;
-      sliver.hidden = false;
-    } else {
-      fab.hidden = false;
-      sliver.hidden = true;
-    }
-  }
-
-  function hideHere() {
-    hiddenHosts.add(location.hostname);
-    saveHidden();
-    applyHidden();
-  }
-
-  function unhideHere() {
-    hiddenHosts.delete(location.hostname);
-    saveHidden();
-    applyHidden();
   }
 
   // ----- tab rendering -----
@@ -800,35 +786,62 @@
   const MAX_PAGE_ROWS = 300;
 
   function renderPageTab() {
-    const anchors = document.querySelectorAll("a.cm-card-link[data-cm-card]");
-    // Map<cardName, { href, count, anchors: Element[] }>
+    // Reflect toggle state. If CM.siteSettings isn't ready yet, default
+    // to the hostname-derived defaults via get() (which handles that).
+    const settings = CM.siteSettings
+      ? CM.siteSettings.get(location.hostname)
+      : { discover: false, hyperlinks: false };
+    if (pageToggleDiscover) pageToggleDiscover.checked = !!settings.discover;
+    if (pageToggleHyperlinks) pageToggleHyperlinks.checked = !!settings.hyperlinks;
+    if (pageToggleHyperlinksRow) pageToggleHyperlinksRow.hidden = !settings.discover;
+
+    const names = [];
     const byName = new Map();
-    for (const a of anchors) {
-      const name = a.dataset.cmCard;
-      if (!name) continue;
-      let bucket = byName.get(name);
-      if (!bucket) {
-        bucket = { href: a.href || "#", count: 0, anchors: [] };
-        byName.set(name, bucket);
+
+    if (settings.discover && settings.hyperlinks) {
+      // Full mode — read from the in-page anchors the rewriter created.
+      const anchors = document.querySelectorAll("a.cm-card-link[data-cm-card]");
+      for (const a of anchors) {
+        const name = a.dataset.cmCard;
+        if (!name) continue;
+        let bucket = byName.get(name);
+        if (!bucket) {
+          bucket = { href: a.href || "#", count: 0, anchors: [] };
+          byName.set(name, bucket);
+        }
+        if (bucket.href.indexOf("cardmystic.com/") === -1 &&
+            typeof a.href === "string" &&
+            a.href.indexOf("cardmystic.com/") !== -1) {
+          bucket.href = a.href;
+        }
+        bucket.anchors.push(a);
+        bucket.count++;
       }
-      // Prefer a resolved CardMystic href over the scryfall placeholder.
-      if (bucket.href.indexOf("cardmystic.com/") === -1 &&
-          typeof a.href === "string" &&
-          a.href.indexOf("cardmystic.com/") !== -1) {
-        bucket.href = a.href;
+      for (const k of byName.keys()) names.push(k);
+    } else if (settings.discover && CM.detectedCardNames) {
+      // Detect mode — names come from the read-only collect Set of
+      // normalized canonical keys. Map each back to its original-cased
+      // display string via CM.cardNamesDisplay.
+      for (const key of CM.detectedCardNames) {
+        const display = (CM.cardNamesDisplay && CM.cardNamesDisplay.get(key)) || key;
+        names.push(display);
+        byName.set(display, { href: "#", count: 0, anchors: [], canonical: key });
       }
-      bucket.anchors.push(a);
-      bucket.count++;
     }
 
-    const names = Array.from(byName.keys()).sort((x, y) =>
-      x.localeCompare(y, undefined, { sensitivity: "base" })
-    );
+    names.sort((x, y) => x.localeCompare(y, undefined, { sensitivity: "base" }));
 
     pageCount.textContent = String(names.length);
 
     if (!names.length) {
       pageList.innerHTML = "";
+      // Message depends on why the list is empty.
+      if (!settings.discover) {
+        pageEmpty.textContent =
+          "Turn on detection above to see cards on this page.";
+      } else {
+        pageEmpty.textContent = "No card names detected on this page yet.";
+      }
       pageEmpty.hidden = false;
       return;
     }
@@ -840,39 +853,71 @@
       const bucket = byName.get(name);
       const li = document.createElement("li");
 
-      const a = document.createElement("a");
-      a.className = "panel__cardlink";
-      a.dataset.cmCard = name;
-      a.href = bucket.href || "#";
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-      a.textContent = name;
+      // In full mode render an <a>; in detect mode a <span> (no URL
+      // without a resolved card). Both get data-cm-card so the shadow-
+      // root hover install still shows the preview on hover.
+      let nameEl;
+      if (settings.hyperlinks && bucket.anchors.length) {
+        nameEl = document.createElement("a");
+        nameEl.className = "panel__cardlink";
+        nameEl.href = bucket.href || "#";
+        nameEl.target = "_blank";
+        nameEl.rel = "noopener noreferrer";
+      } else {
+        nameEl = document.createElement("span");
+        nameEl.className = "panel__cardlink";
+      }
+      nameEl.dataset.cmCard = name;
+      nameEl.textContent = name;
       if (bucket.count > 1) {
         const sup = document.createElement("sup");
         sup.textContent = `\u00D7${bucket.count}`;
-        a.appendChild(sup);
+        nameEl.appendChild(sup);
       }
-      li.appendChild(a);
+      li.appendChild(nameEl);
 
+      // Next-occurrence arrow only when we have in-page anchors to
+      // scroll to (i.e. full mode with actual DOM hits).
       if (bucket.anchors.length) {
-        const next = document.createElement("button");
-        next.type = "button";
-        next.className = "panel__nextOccurrence";
-        next.setAttribute("aria-label", `Scroll to next occurrence of ${name}`);
-        next.textContent = "\u2193"; // ↓
-        next.addEventListener("click", (e) => {
+        const nextBtn = document.createElement("button");
+        nextBtn.type = "button";
+        nextBtn.className = "panel__nextOccurrence";
+        nextBtn.setAttribute("aria-label", `Scroll to next occurrence of ${name}`);
+        nextBtn.textContent = "\u2193";
+        nextBtn.addEventListener("click", (e) => {
           e.preventDefault();
           e.stopPropagation();
           scrollToNext(name, bucket.anchors);
         });
-        li.appendChild(next);
+        li.appendChild(nextBtn);
       }
 
+      // "+"/"×" clipboard-toggle mirror. In full mode we can read the
+      // in-page sibling's --added class for state; in detect mode we
+      // check against the clipboard's cardKeys via CM.plus.
+      let onClipboard = false;
+      if (settings.hyperlinks && bucket.anchors.length) {
+        const firstInPageBtn = bucket.anchors[0].nextElementSibling;
+        onClipboard = !!(firstInPageBtn
+          && firstInPageBtn.classList
+          && firstInPageBtn.classList.contains("cm-card-plus--added"));
+      } else if (CM.plus && CM.plus.keyOf) {
+        // Best-effort: use the addedNames Set via a clipboard parse.
+        // We can't easily reach the module-scope addedNames from here,
+        // but the reconcile path already mirrors it onto --added
+        // classes when present. In detect mode there are no such
+        // buttons, so fall back to a fresh parse.
+        onClipboard = false;
+      }
       const plus = document.createElement("button");
       plus.type = "button";
-      plus.className = "panel__addToClip";
-      plus.setAttribute("aria-label", `Add ${name} to clipboard`);
-      plus.textContent = "+";
+      plus.className = "panel__addToClip"
+        + (onClipboard ? " panel__addToClip--added" : "");
+      plus.setAttribute(
+        "aria-label",
+        onClipboard ? `Remove ${name} from clipboard` : `Add ${name} to clipboard`
+      );
+      plus.textContent = onClipboard ? "\u00D7" : "+";
       plus.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1097,8 +1142,6 @@
 
   function onPointerDown(e) {
     if (e.button !== 0 && e.pointerType === "mouse") return;
-    // Don't start drag when pressing the hover-X.
-    if (e.target && e.target.closest("." + "fab__close")) return;
     // While the panel is open, the FAB is a docked handle — clicks toggle
     // the panel closed, drag doesn't make sense.
     if (panelOpen) return;
@@ -1218,12 +1261,6 @@
     badge.className = "fab__badge";
     fab.appendChild(badge);
 
-    fabCloseBtn = document.createElement("button");
-    fabCloseBtn.className = "fab__close";
-    fabCloseBtn.type = "button";
-    fabCloseBtn.setAttribute("aria-label", "Hide on this site");
-    fabCloseBtn.textContent = "\u00D7";
-    fab.appendChild(fabCloseBtn);
 
     // Panel — always rendered; visibility controlled by .panel--open class.
     // (Using a class instead of the [hidden] attribute lets the slide-out
@@ -1249,8 +1286,8 @@
     tabsNav.className = "tabs";
     tabsNav.setAttribute("role", "tablist");
     const tabDefs = [
-      { id: "clip", label: "Clipped Cards" },
       { id: "page", label: "Cards on Page" },
+      { id: "clip", label: "Clipped Cards" },
       { id: "history", label: "Clip History" },
     ];
     for (const def of tabDefs) {
@@ -1306,6 +1343,50 @@
     pageBody.className = "tab-body";
     pageBody.dataset.tab = "page";
     pageBody.hidden = true;
+
+    // Toggle block at the top of the tab: detect on/off, then (when
+    // detect is on) hyperlinks+hover on/off.
+    const toggles = document.createElement("div");
+    toggles.className = "tab-body__toggles";
+
+    const rowDiscover = document.createElement("label");
+    rowDiscover.className = "switch-row";
+    const labDiscover = document.createElement("span");
+    labDiscover.className = "switch-row__label";
+    labDiscover.textContent = "Detect cards on this site";
+    const swDiscover = document.createElement("span");
+    swDiscover.className = "switch";
+    pageToggleDiscover = document.createElement("input");
+    pageToggleDiscover.type = "checkbox";
+    pageToggleDiscover.dataset.toggle = "discover";
+    const sldDiscover = document.createElement("span");
+    sldDiscover.className = "switch__slider";
+    swDiscover.appendChild(pageToggleDiscover);
+    swDiscover.appendChild(sldDiscover);
+    rowDiscover.appendChild(labDiscover);
+    rowDiscover.appendChild(swDiscover);
+
+    pageToggleHyperlinksRow = document.createElement("label");
+    pageToggleHyperlinksRow.className = "switch-row";
+    const labLinks = document.createElement("span");
+    labLinks.className = "switch-row__label";
+    labLinks.textContent = "Add hover previews and links";
+    const swLinks = document.createElement("span");
+    swLinks.className = "switch";
+    pageToggleHyperlinks = document.createElement("input");
+    pageToggleHyperlinks.type = "checkbox";
+    pageToggleHyperlinks.dataset.toggle = "hyperlinks";
+    const sldLinks = document.createElement("span");
+    sldLinks.className = "switch__slider";
+    swLinks.appendChild(pageToggleHyperlinks);
+    swLinks.appendChild(sldLinks);
+    pageToggleHyperlinksRow.appendChild(labLinks);
+    pageToggleHyperlinksRow.appendChild(swLinks);
+
+    toggles.appendChild(rowDiscover);
+    toggles.appendChild(pageToggleHyperlinksRow);
+    pageBody.appendChild(toggles);
+
     const pageHeader = document.createElement("div");
     pageHeader.className = "tab-body__header";
     const pageTitle = document.createElement("span");
@@ -1353,8 +1434,8 @@
     historyScroll.appendChild(historyEmpty);
     historyBody.appendChild(historyScroll);
 
-    body.appendChild(clipBody);
     body.appendChild(pageBody);
+    body.appendChild(clipBody);
     body.appendChild(historyBody);
     tabBodies = { clip: clipBody, page: pageBody, history: historyBody };
     panel.appendChild(body);
@@ -1372,17 +1453,8 @@
     tabFooter.appendChild(viewerBtn);
     panel.appendChild(tabFooter);
 
-    // Sliver
-    sliver = document.createElement("button");
-    sliver.className = "sliver";
-    sliver.type = "button";
-    sliver.hidden = true;
-    sliver.setAttribute("aria-label", "Show CardMystic");
-    sliver.style.pointerEvents = "auto";
-
     root.appendChild(panel);
     root.appendChild(fab);
-    root.appendChild(sliver);
   }
 
   function wire() {
@@ -1394,7 +1466,6 @@
         e.stopPropagation();
         return;
       }
-      if (e.target && e.target.closest("." + "fab__close")) return;
       togglePanel();
     });
 
@@ -1404,19 +1475,6 @@
     fab.addEventListener("pointerup", onPointerUp);
     fab.addEventListener("pointercancel", onPointerUp);
 
-    // Hover X → hide on this site.
-    fabCloseBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      hideHere();
-    });
-
-    // Sliver → restore.
-    sliver.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      unhideHere();
-    });
 
     // Panel close X.
     panelCloseBtn.addEventListener("click", (e) => {
@@ -1443,6 +1501,28 @@
     });
 
     // Tab clicks — delegated on the nav since buttons are siblings.
+    // Cards on Page toggle switches — persist per-site settings.
+    if (pageToggleDiscover) {
+      pageToggleDiscover.addEventListener("change", () => {
+        if (!CM.siteSettings) return;
+        const d = !!pageToggleDiscover.checked;
+        // Flipping discover off coherently turns hyperlinks off too
+        // (siteSettings.set enforces this as well, belt-and-suspenders).
+        CM.siteSettings.set(location.hostname, {
+          discover: d,
+          hyperlinks: d ? undefined : false,
+        });
+      });
+    }
+    if (pageToggleHyperlinks) {
+      pageToggleHyperlinks.addEventListener("change", () => {
+        if (!CM.siteSettings) return;
+        CM.siteSettings.set(location.hostname, {
+          hyperlinks: !!pageToggleHyperlinks.checked,
+        });
+      });
+    }
+
     tabsNav.addEventListener("click", (e) => {
       const btn = e.target.closest && e.target.closest(".tab");
       if (!btn || !btn.dataset.tab) return;
@@ -1474,6 +1554,19 @@
       if (panelOpen && activeTab === "history") renderHistoryTab();
     });
 
+    // Per-site settings — update the toggle reflection + re-render if
+    // currently on the page tab.
+    document.addEventListener("cm:sitesettingschanged", (e) => {
+      const h = e && e.detail && e.detail.hostname;
+      if (h && h !== location.hostname) return;
+      if (panelOpen && activeTab === "page") renderPageTab();
+    });
+
+    // Detect-mode results changed — refresh the page tab if visible.
+    document.addEventListener("cm:detectedchanged", () => {
+      if (panelOpen && activeTab === "page") renderPageTab();
+    });
+
     // Install the hover tooltip system on our shadow root too, so hovering
     // the Cards on Page tab's card links shows the image preview.
     if (CM.hover && CM.hover.install) {
@@ -1493,7 +1586,6 @@
     wire();
     await loadState();
     applyPosition();
-    applyHidden();
     watchStorage();
   }
 

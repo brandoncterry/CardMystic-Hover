@@ -13,7 +13,8 @@
       "Bash(node -e ' *)",
       "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('manifest.json','utf8'\\)\\); console.log\\('manifest.json OK'\\);\")",
       "Bash(node -e \"new Function\\(require\\('fs'\\).readFileSync\\('src/content/fab.js','utf8'\\)\\); console.log\\('fab.js OK'\\);\")",
-      "Bash(node -e \"new Function\\(require\\('fs'\\).readFileSync\\('src/content/history.js','utf8'\\)\\); console.log\\('history.js OK'\\);\")"
+      "Bash(node -e \"new Function\\(require\\('fs'\\).readFileSync\\('src/content/history.js','utf8'\\)\\); console.log\\('history.js OK'\\);\")",
+      "Bash(node -e \"new Function\\(require\\('fs'\\).readFileSync\\('src/content/plus.js','utf8'\\)\\); console.log\\('plus.js OK'\\);\")"
     ]
   }
 }

@@ -251,5 +251,95 @@
     ensurePlusButtons(root);
   }
 
-  CM.rewriter = { rewrite, LINK_CLASS };
+  // --- Read-only scan ---
+  //
+  // Walks the same text nodes rewriteTextNodes would, but just records
+  // canonical card keys in a Set. Does NOT touch the DOM. Used by
+  // content.js's "detect" mode so the Cards on Page tab can list
+  // detected cards without injecting anchors/+/hover.
+  function collect(root, trie, adapter) {
+    const out = new Set();
+    if (!root || !trie) return out;
+    const skipSelectors = BUILT_IN_SKIP.concat((adapter && adapter.skipSelectors) || []);
+    // Also collect keys from any existing overridden anchors — on adapter
+    // sites the page may already carry resolvable card links even before
+    // we scan text nodes.
+    if (root.querySelectorAll) {
+      const anchors = root.querySelectorAll("a");
+      for (const a of anchors) {
+        if (isSkipped(a, skipSelectors)) continue;
+        const text = (a.textContent || "").trim();
+        if (!text || text.length > 80) continue;
+        const norm = CM.matcher.normalize(text);
+        const matches = CM.matcher.findAll(trie, text);
+        if (matches.length !== 1) continue;
+        const m = matches[0];
+        if (m.start !== 0 || m.end !== norm.length) continue;
+        out.add(CM.matcher.normalize(m.name));
+      }
+    }
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if (!node.nodeValue || node.nodeValue.length < 3) return NodeFilter.FILTER_REJECT;
+        if (hasAnchorAncestor(node)) return NodeFilter.FILTER_REJECT;
+        if (isSkipped(node, skipSelectors)) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    let n;
+    while ((n = walker.nextNode())) {
+      const matches = CM.matcher.findAll(trie, n.nodeValue);
+      for (const m of matches) out.add(CM.matcher.normalize(m.name));
+    }
+    return out;
+  }
+
+  // --- Reverse of rewrite ---
+  //
+  // Removes every DOM change the rewriter previously made under `root`:
+  //   - Anchors we CREATED (no data-cm-original-href) collapse back to a
+  //     plain text node with the original visible casing.
+  //   - Anchors we TOOK OVER (have data-cm-original-href) get their href
+  //     restored and our classes/data stripped; element stays in place.
+  //   - All sibling "+" buttons for our links are removed.
+  //   - Adapter styles we injected (style[data-cm-adapter]) are removed.
+  // Idempotent: a re-call with nothing to undo is a no-op.
+  function unrewrite(root) {
+    const scope = root || document;
+
+    // Pass 1: every tagged anchor.
+    const anchors = scope.querySelectorAll("a." + LINK_CLASS);
+    for (const a of anchors) {
+      const sib = a.nextElementSibling;
+      if (sib && sib.classList && sib.classList.contains("cm-card-plus")) {
+        sib.remove();
+      }
+      if (a.hasAttribute("data-cm-original-href")) {
+        // Overridden anchor — restore original href and shed markers.
+        const orig = a.getAttribute("data-cm-original-href");
+        if (orig) a.setAttribute("href", orig);
+        a.classList.remove(LINK_CLASS);
+        a.removeAttribute("data-cm-card");
+        a.removeAttribute("data-cm-original-href");
+        // target/rel were set by us; if no original target existed we
+        // leave target alone (safer than guessing). Same for rel.
+      } else {
+        // Anchor we created — replace with plain text.
+        const text = document.createTextNode(a.textContent || "");
+        a.replaceWith(text);
+      }
+    }
+
+    // Pass 2: orphan "+" buttons (anchor was removed by some other
+    // code path, or we failed to find a sibling above).
+    const orphanPlus = scope.querySelectorAll("button.cm-card-plus");
+    for (const b of orphanPlus) b.remove();
+
+    // Pass 3: injected adapter-style tags (found on document.head, not
+    // necessarily under `root`).
+    const styles = document.querySelectorAll("style[data-cm-adapter]");
+    for (const s of styles) s.remove();
+  }
+
+  CM.rewriter = { rewrite, collect, unrewrite, LINK_CLASS };
 })();

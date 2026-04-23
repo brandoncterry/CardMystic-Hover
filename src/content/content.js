@@ -1,37 +1,72 @@
-// Content script entry point. Picks an adapter for the current host, fetches
-// the Scryfall card-names catalog from the background, builds a trie, and
-// runs the rewriter. A MutationObserver re-scans the page when content is
-// added (SPA navigation, infinite scroll, lazy-loaded comments, etc.).
+// Content script entry point. The FAB + drawer + clipboard bookkeeping
+// run on every page (<all_urls>). The card-detection / rewriting
+// pipeline is driven by per-site settings in CM.siteSettings:
 //
-// adapter.root() may return a single Element or an array of Elements. The
-// adapter can return an empty array on initial boot (e.g. reddit before the
-// post loads) — the MutationObserver will trigger a rescan once content
-// appears.
+//   off     — nothing runs. Cards on Page is empty.
+//   detect  — read-only scan. Populates CM.detectedCardNames so the
+//             Cards on Page tab can list hits. Page DOM untouched.
+//   full    — full rewriter: anchors on text-node matches, hover
+//             tooltip on document, adapter styles, "+" buttons,
+//             MutationObserver-driven rescans.
+//
+// Adapter-matched sites default to "full". All other sites default to
+// "off". Users flip the per-site toggles in the drawer.
 (function () {
   const CM = window.CM;
   if (!CM) return;
 
   const adapter = CM.pickAdapter(location.hostname);
-  if (!adapter) return;
 
+  // Generic fallback used when the current site has no matching adapter
+  // but the user enables detection/hyperlinks anyway.
+  const GENERIC_ADAPTER = {
+    name: "generic",
+    root: () => document.body,
+    skipSelectors: [
+      "a.cm-card-link",
+      "button.cm-card-plus",
+      ".cm-hover-tooltip",
+      "script", "style", "code", "pre",
+      "textarea", "input", "button", "select",
+      "nav", "header", "footer",
+    ],
+  };
+
+  function effectiveAdapter() { return adapter || GENERIC_ADAPTER; }
+
+  // ----- state -----
+  let catalog = null;         // raw array of Scryfall names; reused by ensureTrie
   let trie = null;
+  let observer = null;
+  let observerMode = null;    // which mode the observer was attached under
   let scanning = false;
   let pendingRescan = false;
+  let docHoverInstalled = false;
+  let adapterStyleEl = null;
+  let inMode = "off";         // "off" | "detect" | "full"
 
   function currentRoots() {
-    const r = adapter.root();
+    const a = effectiveAdapter();
+    const r = a.root();
     if (!r) return [];
     return Array.isArray(r) ? r.filter(Boolean) : [r];
   }
 
-  function scan() {
+  function ensureTrie() {
+    if (trie || !catalog) return;
+    trie = CM.matcher.makeTrie(catalog);
+  }
+
+  // ----- full mode (rewriter) -----
+
+  function fullScan() {
     if (!trie) return;
     if (scanning) { pendingRescan = true; return; }
     scanning = true;
     try {
-      const roots = currentRoots();
-      for (const root of roots) {
-        CM.rewriter.rewrite(root, trie, adapter);
+      const a = effectiveAdapter();
+      for (const root of currentRoots()) {
+        CM.rewriter.rewrite(root, trie, a);
       }
     } catch (e) {
       console.error("[CardMystic] rewrite failed", e);
@@ -39,88 +74,198 @@
       scanning = false;
       if (pendingRescan) {
         pendingRescan = false;
-        requestAnimationFrame(scan);
+        requestAnimationFrame(fullScan);
       }
     }
   }
 
-  function observe() {
-    // Always observe document.body so SPA routing and late content are caught.
-    // The rewriter itself filters out skipped subtrees.
-    const target = document.body;
-    if (!target) return;
-    const obs = new MutationObserver((records) => {
-      for (const r of records) {
-        if (r.addedNodes && r.addedNodes.length) {
-          pendingRescan = true;
-          break;
-        }
-      }
-      if (pendingRescan) requestAnimationFrame(scan);
-    });
-    obs.observe(target, { childList: true, subtree: true });
+  // ----- detect mode (read-only scan) -----
+
+  function runDetect() {
+    if (!trie) return;
+    const a = effectiveAdapter();
+    const out = new Set();
+    for (const root of currentRoots()) {
+      const s = CM.rewriter.collect(root, trie, a);
+      for (const k of s) out.add(k);
+    }
+    CM.detectedCardNames = out;
+    document.dispatchEvent(new CustomEvent("cm:detectedchanged"));
   }
 
-  // Inject any adapter-provided CSS at the earliest moment we have a <head>
-  // or <html>. Used to neutralize host-site hover overlays that can't be
-  // killed via DOM manipulation alone (e.g. React-managed popups that
-  // re-mount on every mouseenter).
+  // ----- observer -----
+
+  function attachObserver(forMode) {
+    if (observer && observerMode === forMode) return;
+    detachObserver();
+    const target = document.body;
+    if (!target) return;
+    observer = new MutationObserver((records) => {
+      // Cheap early-exit on "nothing added" bursts.
+      let added = false;
+      for (const r of records) {
+        if (r.addedNodes && r.addedNodes.length) { added = true; break; }
+      }
+      if (!added) return;
+      if (forMode === "full") {
+        pendingRescan = true;
+        requestAnimationFrame(fullScan);
+      } else {
+        requestAnimationFrame(runDetect);
+      }
+    });
+    observer.observe(target, { childList: true, subtree: true });
+    observerMode = forMode;
+  }
+
+  function detachObserver() {
+    if (!observer) return;
+    observer.disconnect();
+    observer = null;
+    observerMode = null;
+  }
+
+  // ----- adapter CSS (only for adapter-matched sites in full mode) -----
+
   function injectAdapterStyles() {
-    if (!adapter.styles) return;
+    if (adapterStyleEl) return;
+    if (!adapter || !adapter.styles) return;
     const style = document.createElement("style");
     style.dataset.cmAdapter = adapter.name || "cm";
     style.textContent = adapter.styles;
     (document.head || document.documentElement).appendChild(style);
+    adapterStyleEl = style;
   }
 
+  function removeAdapterStyles() {
+    if (adapterStyleEl && adapterStyleEl.parentNode) {
+      adapterStyleEl.parentNode.removeChild(adapterStyleEl);
+    }
+    adapterStyleEl = null;
+  }
+
+  // ----- mode transitions -----
+
+  function enterFull() {
+    ensureTrie();
+    injectAdapterStyles();
+    if (!docHoverInstalled && CM.hover && CM.hover.install) {
+      CM.hover.install();
+      docHoverInstalled = true;
+    }
+    fullScan();
+    attachObserver("full");
+  }
+
+  function leaveFull() {
+    detachObserver();
+    try { CM.rewriter.unrewrite(document); }
+    catch (err) { console.warn("[CardMystic] unrewrite failed", err); }
+    removeAdapterStyles();
+    // Leave docHoverInstalled alone — the document-level listener is
+    // harmless when there are no [data-cm-card] elements, and
+    // reinstalling would just duplicate the listener.
+  }
+
+  function enterDetect() {
+    ensureTrie();
+    runDetect();
+    attachObserver("detect");
+  }
+
+  function leaveDetect() {
+    detachObserver();
+    CM.detectedCardNames = null;
+    document.dispatchEvent(new CustomEvent("cm:detectedchanged"));
+  }
+
+  function applyMode(want) {
+    if (want === inMode) return;
+    // Leave old.
+    if (inMode === "full") leaveFull();
+    else if (inMode === "detect") leaveDetect();
+    // Enter new.
+    if (want === "full") enterFull();
+    else if (want === "detect") enterDetect();
+    inMode = want;
+  }
+
+  function modeFromSettings(s) {
+    if (!s || !s.discover) return "off";
+    return s.hyperlinks ? "full" : "detect";
+  }
+
+  function applySettings() {
+    if (!CM.siteSettings) return;
+    const s = CM.siteSettings.get(location.hostname);
+    applyMode(modeFromSettings(s));
+  }
+
+  // ----- boot -----
+
   function boot() {
-    chrome.runtime.sendMessage({ type: "getCardNames" }, (resp) => {
+    chrome.runtime.sendMessage({ type: "getCardNames" }, async (resp) => {
       if (!resp || !resp.ok) {
         console.warn("[CardMystic] card-names fetch failed", resp && resp.error);
+        bringUpLiteSurface();
         return;
       }
-      trie = CM.matcher.makeTrie(resp.data);
-      // Expose a fast lookup Set for the "+" click handler. We use the same
-      // normalization as the trie so e.g. "Urza's Saga" (curly apostrophe
-      // on-page) matches the ASCII-apostrophe entry in the Scryfall catalog.
-      CM.cardNames = new Set(resp.data.map((n) => CM.matcher.normalize(n)));
+      catalog = resp.data;
 
-      // Face-name index for double-faced / split / adventure / MDFC cards.
-      // Scryfall's catalog stores these as "Front // Back"; decklists in the
-      // wild frequently reference only one face ("Delver of Secrets" from
-      // Arena exports, "Fire" for a split card, etc.). Build a map from each
-      // face's normalized name to its canonical full name so the "+" click
-      // handler can resolve either half back to the full card.
-      //
-      // Only register a face if it isn't already a standalone card name —
-      // real standalones always win. On collision between two multi-face
-      // cards sharing a face-name substring, keep the first registration.
+      // Card-name Set + face index for parseDeckList / clipboard bookkeeping.
+      // CM.cardNamesDisplay maps normalized key → original-cased name so
+      // the Cards on Page tab can show "Sol Ring" instead of "sol ring"
+      // when rendering from a detect-mode Set of canonical keys.
+      CM.cardNames = new Set();
+      CM.cardNamesDisplay = new Map();
+      for (const original of catalog) {
+        if (typeof original !== "string") continue;
+        const norm = CM.matcher.normalize(original);
+        CM.cardNames.add(norm);
+        if (!CM.cardNamesDisplay.has(norm)) CM.cardNamesDisplay.set(norm, original);
+      }
       CM.cardFaces = new Map();
-      for (const original of resp.data) {
+      for (const original of catalog) {
         if (typeof original !== "string" || original.indexOf(" // ") < 0) continue;
         const canonical = CM.matcher.normalize(original);
         for (const part of canonical.split(" // ")) {
           const face = part.trim();
           if (!face || face === canonical) continue;
-          if (CM.cardNames.has(face)) continue;    // don't shadow a real card
-          if (CM.cardFaces.has(face)) continue;    // first registration wins
+          if (CM.cardNames.has(face)) continue;
+          if (CM.cardFaces.has(face)) continue;
           CM.cardFaces.set(face, canonical);
         }
       }
-      scan();
-      CM.hover.install();
+
+      // Always-on surfaces.
       if (CM.plus && CM.plus.install) CM.plus.install();
-      // Load history state before plus.js's first reconcile fires so
-      // history.process catches the boot-time clipboard read.
       if (CM.history && CM.history.init) CM.history.init();
       if (CM.fab && CM.fab.install) CM.fab.install();
-      observe();
+
+      // Settings-driven pipeline.
+      if (CM.siteSettings && CM.siteSettings.init) {
+        await CM.siteSettings.init();
+      }
+      applySettings();
+      document.addEventListener("cm:sitesettingschanged", (e) => {
+        const h = e.detail && e.detail.hostname;
+        if (h && h !== location.hostname) return;
+        applySettings();
+      });
     });
   }
 
-  // Inject styles as early as possible — before the card-names fetch returns —
-  // so the host site's hover popup is hidden even on the very first hover.
-  injectAdapterStyles();
+  // Minimal bring-up when the catalog isn't available yet. FAB and
+  // right-click clear still work; classification will start working
+  // once a later page hits the cache.
+  function bringUpLiteSurface() {
+    if (CM.plus && CM.plus.install) CM.plus.install();
+    if (CM.history && CM.history.init) CM.history.init();
+    if (CM.fab && CM.fab.install) CM.fab.install();
+    // sitesettings listeners still need to initialize so subsequent
+    // loads can see user changes.
+    if (CM.siteSettings && CM.siteSettings.init) CM.siteSettings.init();
+  }
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot, { once: true });

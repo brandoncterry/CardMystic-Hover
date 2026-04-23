@@ -42,34 +42,63 @@
   // Button creation
   // -----------------------------------------------------------------------
 
+  // Reflect the "is this card currently on the clipboard?" state on a
+  // single button: toggles the purple `--added` class, swaps the glyph
+  // from "+" to "-", and updates the accessible label so screen readers
+  // announce the correct action ("Add X" vs "Remove X").
+  //
+  // CRITICAL: every write here must be guarded by an equality check.
+  // Unconditional `btn.textContent = "+"` replaces the button's text node
+  // even when the value is identical, which is a childList mutation that
+  // the rewriter's MutationObserver on document.body picks up. That would
+  // re-trigger a scan → ensureFor → reflectAddedState → mutation, an
+  // infinite loop. Idempotent writes break the cycle.
+  function reflectAddedState(btn, isAdded) {
+    if (!btn) return;
+    const name = btn.dataset && btn.dataset.cmCard;
+
+    const wantClass = !!isAdded;
+    if (btn.classList.contains("cm-card-plus--added") !== wantClass) {
+      btn.classList.toggle("cm-card-plus--added", wantClass);
+    }
+
+    const wantText = wantClass ? "\u00D7" : "+"; // × (cross) when removable
+    if (btn.textContent !== wantText) {
+      btn.textContent = wantText;
+    }
+
+    if (name) {
+      const wantLabel = wantClass
+        ? `Remove ${name} from clipboard`
+        : `Add ${name} to clipboard`;
+      if (btn.getAttribute("aria-label") !== wantLabel) {
+        btn.setAttribute("aria-label", wantLabel);
+      }
+    }
+  }
+
   function ensureFor(anchor, name) {
     if (!anchor || !name) return;
     const next = anchor.nextElementSibling;
     if (next && next.classList && next.classList.contains(BTN_CLASS)
         && next.dataset.cmCard === name) {
-      if (addedNames.has(keyOf(name))) {
-        next.classList.add("cm-card-plus--added");
-      }
+      reflectAddedState(next, addedNames.has(keyOf(name)));
       return;
     }
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = BTN_CLASS;
     btn.dataset.cmCard = name;
-    btn.setAttribute("aria-label", `Add ${name} to clipboard`);
-    btn.textContent = "+";
-    // Copy the link's computed color so the "+" reads as part of the same
-    // visual affordance on whatever palette the host page uses. Inline
-    // style here; the --added class uses !important to win over it.
+    // Copy the link's computed color so the glyph reads as part of the
+    // same visual affordance on whatever palette the host page uses.
+    // Inline style here; the --added class uses !important to win over it.
     try {
       const c = getComputedStyle(anchor).color;
       if (c) btn.style.color = c;
     } catch (_) { /* noop */ }
     anchor.after(btn);
-
-    if (addedNames.has(keyOf(name))) {
-      btn.classList.add("cm-card-plus--added");
-    }
+    // Sets glyph + aria-label + class consistent with current clipboard.
+    reflectAddedState(btn, addedNames.has(keyOf(name)));
   }
 
   // -----------------------------------------------------------------------
@@ -105,22 +134,29 @@
   let toastEl = null;
   let toastDismissTimer = null;
 
+  // Default hotkey-hint markup. Used when showToast is called with no
+  // argument (the existing "+" click path).
+  const DEFAULT_TOAST_HTML =
+    '<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd>' +
+    '<span class="cm-clip-toast__text"> for Clipped Cards</span>';
+
   function ensureToast() {
     if (toastEl && toastEl.isConnected) return toastEl;
     toastEl = document.createElement("div");
     toastEl.className = "cm-clip-toast";
     toastEl.setAttribute("role", "status");
     toastEl.setAttribute("aria-live", "polite");
-    // Trusted static markup — no interpolation.
-    toastEl.innerHTML =
-      '<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd>' +
-      '<span class="cm-clip-toast__text"> for Clipped Cards</span>';
+    // Content is set per-call in showToast; leave empty at creation.
     document.body.appendChild(toastEl);
     return toastEl;
   }
 
-  function showToast() {
+  // showToast() — default hotkey hint (existing callers).
+  // showToast(html) — custom message; HTML is trusted (our own code).
+  // showToast("Plain text") — also fine; plain text is valid innerHTML.
+  function showToast(html) {
     const el = ensureToast();
+    el.innerHTML = html == null ? DEFAULT_TOAST_HTML : String(html);
     el.classList.add("cm-clip-toast--visible");
     clearTimeout(toastDismissTimer);
     toastDismissTimer = setTimeout(() => {
@@ -281,8 +317,7 @@
     const buttons = document.querySelectorAll("." + BTN_CLASS);
     for (const el of buttons) {
       const k = keyOf(el.dataset.cmCard || "");
-      if (nextKeys.has(k)) el.classList.add("cm-card-plus--added");
-      else el.classList.remove("cm-card-plus--added");
+      reflectAddedState(el, nextKeys.has(k));
     }
 
     // Session + history bookkeeping. history.process is a no-op before
@@ -313,6 +348,39 @@
     try {
       document.dispatchEvent(new CustomEvent("cm:clipboardchanged"));
     } catch (_) { /* noop */ }
+  }
+
+  // Empty the clipboard entirely. Used by the right-click "Clear
+  // CardMystic clipboard" menu item (the service worker injects this
+  // call into the active tab's content-script world). Runs the full
+  // reconcile + history transition: the just-cleared list gets archived
+  // to Clip History because reconcileClipboard("") → CM.history.process("")
+  // flips the session to a >1 delta for any list longer than one card.
+  // Also surfaces a toast with the cleared count.
+  async function clearClipboard() {
+    let existing = "";
+    try { existing = await navigator.clipboard.readText(); } catch (_) {}
+    const parse = parseDeckList(existing);
+    const count = parse.isDeckList ? parse.cardKeys.size : 0;
+
+    try {
+      await navigator.clipboard.writeText("");
+    } catch (err) {
+      console.warn("[CardMystic] clearClipboard write failed", err);
+      return false;
+    }
+    reconcileClipboard("");
+    dispatchClipChange();
+
+    if (count > 0) {
+      showToast(
+        "Cleared \u2014 " + count + " card" + (count === 1 ? "" : "s") +
+          " moved to history"
+      );
+    } else {
+      showToast("Clipboard cleared");
+    }
+    return true;
   }
 
   // Exposed helper used by the FAB panel's per-line remove button. Writes
@@ -352,12 +420,29 @@
     } catch (err) {
       console.warn("[CardMystic] clipCard anchor lookup failed", err);
     }
-    // Fallback: do the append ourselves.
+    // Fallback: toggle directly against the clipboard. Mirrors the
+    // in-page onPlusClick semantics so the panel's proxy still does the
+    // right thing if the in-page anchor was stripped by an SPA between
+    // render and click.
     let existing = "";
     try { existing = await navigator.clipboard.readText(); } catch (_) {}
     const parse = parseDeckList(existing);
+    const targetKey = keyOf(name);
+
     if (!parse.isDeckList) return await writeClipboard(name);
-    if (parse.cardKeys.has(keyOf(name))) return true; // already present
+
+    if (parse.cardKeys.has(targetKey)) {
+      const rawLines = existing.split(/\r?\n/);
+      const kept = [];
+      for (const raw of rawLines) {
+        const parsedLine = parseDeckLine(raw);
+        if (parsedLine.kind === "card" && parsedLine.cardKey === targetKey) continue;
+        kept.push(raw);
+      }
+      while (kept.length && !kept[kept.length - 1].trim()) kept.pop();
+      return await writeClipboard(kept.join("\n"));
+    }
+
     const base = (existing || "").trimEnd();
     const joiner = base ? "\n" : "";
     const next = `${base}${joiner}${parse.format.countStyle}${name}`;
@@ -409,9 +494,28 @@
       return;
     }
 
-    // Already on the clipboard under some recognized format — reconcile
-    // already flipped the button purple; no write, no spin, no toast.
+    // Already on the clipboard — button is in its "-" / removal state.
+    // Drop every line whose parsed card key matches (handles Arena format,
+    // Moxfield counts, MTGO markers, split-card variants). No toast on
+    // remove (reserved for additive actions); spin still fires for tactile
+    // feedback.
     if (parse.cardKeys.has(keyOf(name))) {
+      const target = keyOf(name);
+      const rawLines = (existing || "").split(/\r?\n/);
+      const kept = [];
+      for (const raw of rawLines) {
+        const parsedLine = parseDeckLine(raw);
+        if (parsedLine.kind === "card" && parsedLine.cardKey === target) continue;
+        kept.push(raw);
+      }
+      // Trim any trailing blank lines left behind by the removal.
+      while (kept.length && !kept[kept.length - 1].trim()) kept.pop();
+      const next = kept.join("\n");
+      const ok = await writeText(next);
+      if (!ok) { markError(btn); return; }
+      reconcileClipboard(next);
+      dispatchClipChange();
+      spin(btn);
       return;
     }
 
@@ -494,5 +598,6 @@
     keyOf,
     writeClipboard,
     clipCard,
+    clearClipboard,
   };
 })();
