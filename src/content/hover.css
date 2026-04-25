@@ -33,15 +33,16 @@
 
 /* "+" button that appends the card name to the clipboard. Rendered as a
    plain text glyph rather than a boxed UI element so it blends into
-   whatever page design it lands in. The color is copied from the sibling
-   link at creation time (see plus.js) so it matches that page's link
-   palette. Bold so it stands out from surrounding prose. */
+   whatever page design it lands in. Always hyperlink-blue so it reads
+   as an affordance regardless of the host page's text palette. Bold so
+   it stands out from surrounding prose. */
 .cm-card-plus {
   all: unset;
   display: inline-block;
   font-weight: 700;
   line-height: 1;
   margin: 0 2px;
+  color: #2563eb;
   cursor: pointer;
   user-select: none;
   transform-origin: 50% 50%;

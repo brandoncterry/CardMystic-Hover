@@ -89,13 +89,8 @@
     btn.type = "button";
     btn.className = BTN_CLASS;
     btn.dataset.cmCard = name;
-    // Copy the link's computed color so the glyph reads as part of the
-    // same visual affordance on whatever palette the host page uses.
-    // Inline style here; the --added class uses !important to win over it.
-    try {
-      const c = getComputedStyle(anchor).color;
-      if (c) btn.style.color = c;
-    } catch (_) { /* noop */ }
+    // Color is set by CSS (.cm-card-plus / --added / --err) so the glyph
+    // reads as a hyperlink regardless of the host page's text palette.
     anchor.after(btn);
     // Sets glyph + aria-label + class consistent with current clipboard.
     reflectAddedState(btn, addedNames.has(keyOf(name)));

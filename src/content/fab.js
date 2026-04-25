@@ -20,6 +20,9 @@
   const HOST_ID = "cardmystic-fab-host";
   const KEY_POS_Y = "fab:y";
   const KEY_PANEL_Y = "fab:panelY";
+  const KEY_PANEL_OPEN = "fab:open";
+  const KEY_PANEL_TAB = "fab:tab";
+  const VALID_TABS = ["clip", "page", "history"];
   const RIGHT_MARGIN = 12;     // gap from viewport right edge
   const FAB_SIZE = 52;
   const PANEL_W = 320;
@@ -602,11 +605,24 @@
 
   // ----- persistence -----
 
+  // Set by loadState() if the user had the panel open on a prior page.
+  // install() applies it after the DOM is built.
+  let initialPanelOpen = false;
+  // Suppresses the persist write inside open/closePanel and setActiveTab
+  // when the change is being applied from cross-tab storage sync (otherwise
+  // we'd write back the same value and risk a sync loop).
+  let suppressOpenPersist = false;
+  let suppressTabPersist = false;
+
   async function loadState() {
     try {
-      const out = await chrome.storage.local.get([KEY_POS_Y, KEY_PANEL_Y]);
+      const out = await chrome.storage.local.get(
+        [KEY_POS_Y, KEY_PANEL_Y, KEY_PANEL_OPEN, KEY_PANEL_TAB]
+      );
       if (typeof out[KEY_POS_Y] === "number") posY = out[KEY_POS_Y];
       if (typeof out[KEY_PANEL_Y] === "number") panelY = out[KEY_PANEL_Y];
+      if (typeof out[KEY_PANEL_OPEN] === "boolean") initialPanelOpen = out[KEY_PANEL_OPEN];
+      if (VALID_TABS.indexOf(out[KEY_PANEL_TAB]) !== -1) activeTab = out[KEY_PANEL_TAB];
     } catch (err) {
       console.warn("[CardMystic] fab loadState failed", err);
     }
@@ -620,6 +636,16 @@
   function savePanelY() {
     try { chrome.storage.local.set({ [KEY_PANEL_Y]: panelY }); }
     catch (err) { console.warn("[CardMystic] fab savePanelY failed", err); }
+  }
+
+  function savePanelOpen() {
+    try { chrome.storage.local.set({ [KEY_PANEL_OPEN]: panelOpen }); }
+    catch (err) { console.warn("[CardMystic] fab savePanelOpen failed", err); }
+  }
+
+  function savePanelTab() {
+    try { chrome.storage.local.set({ [KEY_PANEL_TAB]: activeTab }); }
+    catch (err) { console.warn("[CardMystic] fab savePanelTab failed", err); }
   }
 
   // Cross-tab sync — if the user drags the FAB or the drawer in
@@ -636,6 +662,21 @@
         panelY = typeof changes[KEY_PANEL_Y].newValue === "number"
           ? changes[KEY_PANEL_Y].newValue : null;
         if (panelOpen) positionPanel();
+      }
+      if (changes[KEY_PANEL_OPEN]) {
+        const next = !!changes[KEY_PANEL_OPEN].newValue;
+        if (next === panelOpen) return;
+        // Re-open / close to mirror the other tab without writing back.
+        suppressOpenPersist = true;
+        try { next ? openPanel() : closePanel(); }
+        finally { suppressOpenPersist = false; }
+      }
+      if (changes[KEY_PANEL_TAB]) {
+        const next = changes[KEY_PANEL_TAB].newValue;
+        if (VALID_TABS.indexOf(next) === -1 || next === activeTab) return;
+        suppressTabPersist = true;
+        try { setActiveTab(next); }
+        finally { suppressTabPersist = false; }
       }
     });
   }
@@ -1088,6 +1129,7 @@
     else detachPageObserver();
 
     renderActiveTab();
+    if (!suppressTabPersist) savePanelTab();
   }
 
   // Remove the clipboard line at rawIdx (index into a fresh split of the
@@ -1121,6 +1163,7 @@
     panel.classList.add("panel--open");
     if (activeTab === "page") attachPageObserver();
     renderActiveTab();
+    if (!suppressOpenPersist) savePanelOpen();
   }
 
   function closePanel() {
@@ -1131,6 +1174,7 @@
     // Detach the Cards on Page observer when the drawer isn't visible so
     // we don't keep responding to DOM mutations for nothing.
     detachPageObserver();
+    if (!suppressOpenPersist) savePanelOpen();
   }
 
   function togglePanel() {
@@ -1587,6 +1631,19 @@
     await loadState();
     applyPosition();
     watchStorage();
+    // Restore the active tab. build() left the DOM showing the default
+    // "clip" tab; sync it to whatever loadState() wrote into activeTab.
+    // Suppressed so we don't write the same value back to storage.
+    suppressTabPersist = true;
+    try { setActiveTab(activeTab); }
+    finally { suppressTabPersist = false; }
+    // Restore the open/closed state from the previous page. Suppressed
+    // so we don't immediately write the same value back to storage.
+    if (initialPanelOpen) {
+      suppressOpenPersist = true;
+      try { openPanel(); }
+      finally { suppressOpenPersist = false; }
+    }
   }
 
   function notify(on) {
